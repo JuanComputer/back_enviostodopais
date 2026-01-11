@@ -5,9 +5,9 @@ spring:
 
   datasource:
     driver-class-name: org.postgresql.Driver
-    url: jdbc:postgresql://localhost:5432/bd_envios
-    username: postgres
-    password: postgres
+    url: jdbc:postgresql://role_envios:npg_Dpt3ncyvXQ2J@ep-divine-rice-ahpqbcua-pooler.c-3.us-east-1.aws.neon.tech/bd_envios?sslmode=require&channel_binding=require
+    username: role_envios
+    password: npg_Dpt3ncyvXQ2J
 
   mail:
     host: smtp.gmail.com
