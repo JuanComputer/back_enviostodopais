@@ -28,23 +28,39 @@ public class Envios {
     @Column(name = "tb_envios_fecha_estimada")
     private LocalDate fechaEstimada;
 
+    // Estado del envío con flujo definido
     @Column(name = "tb_envios_estado", nullable = false)
     private String estado;
 
-    // Relaciones
+    // Nota del último cambio de estado
+    @Column(name = "tb_envios_nota_estado", length = 500)
+    private String notaEstado;
+
+    // Sede de origen (automática, sede del operador)
+    @ManyToOne
+    @JoinColumn(name = "tb_envios_origen_tienda_id")
+    private Tiendas origen;
+
+    // Sede de destino
     @ManyToOne
     @JoinColumn(name = "tb_envios_destino_id")
     private Tiendas destino;
 
+    // Usuario que registró el envío
+    @ManyToOne
+    @JoinColumn(name = "tb_envios_registrado_por_id")
+    private Usuarios registradoPor;
+
+    // Emisor registrado (opcional)
     @ManyToOne
     @JoinColumn(name = "tb_envios_emisor_id")
-    private Usuarios emisor; // Puede ser null si no está registrado
+    private Usuarios emisor;
 
-    // Datos del emisor
+    // Datos del emisor (registrado o anónimo)
     @Column(name = "tb_envios_emisor_nombre")
     private String emisorNombre;
 
-    @Column(name = "tb_envios_emisor_dni")
+    @Column(name = "tb_envios_emisor_dni", length = 11)
     private String emisorDni;
 
     @Column(name = "tb_envios_emisor_razon_social")
@@ -66,9 +82,6 @@ public class Envios {
     @Column(name = "tb_envios_receptor_razon_social")
     private String receptorRazonSocial;
 
-    @Column(name = "tb_envios_receptor_vinculado")
-    private Boolean receptorVinculado;
-
     // Entrega
     @Column(name = "tb_envios_tipo_entrega")
     private String tipoEntrega; // SEDE o DOMICILIO
@@ -79,15 +92,25 @@ public class Envios {
     @Column(name = "tb_envios_referencia_entrega")
     private String referenciaEntrega;
 
-    // Boleta / Factura
-    @Column(name = "tb_envios_tipo_documento")
-    private String tipoDocumento; // BOLETA o FACTURA
+    // Paquete
+    @Column(name = "tb_envios_peso", precision = 8, scale = 2)
+    private BigDecimal peso;
 
-    @Column(name = "tb_envios_numero_documento")
-    private String numeroDocumento; // Serie-correlativo: B001-00000001 / F001-00000001
+    @Column(name = "tb_envios_valor_declarado", precision = 10, scale = 2)
+    private BigDecimal valorDeclarado;
 
     @Column(name = "tb_envios_descripcion_paquete", length = 500)
     private String descripcionPaquete;
+
+    @Column(name = "tb_envios_tipo_servicio")
+    private String tipoServicio; // Estandar o Express
+
+    // Documento (Boleta / Factura)
+    @Column(name = "tb_envios_tipo_documento")
+    private String tipoDocumento;
+
+    @Column(name = "tb_envios_numero_documento")
+    private String numeroDocumento; // B001-20250322-00000001
 
     @Column(name = "tb_envios_precio_envio", precision = 10, scale = 2)
     private BigDecimal precioEnvio;
@@ -95,12 +118,6 @@ public class Envios {
     // Auditoría
     @Column(name = "tb_envios_fecha_actualizacion")
     private LocalDateTime fechaActualizacion;
-
-    @Column(name = "tb_envios_origen_id")
-    private UUID origenId;
-
-    @Column(name = "tb_envios_usuario_creacion")
-    private UUID usuarioCreacion;
 
     @Column(name = "tb_envios_usuario_actualizacion")
     private UUID usuarioActualizacion;

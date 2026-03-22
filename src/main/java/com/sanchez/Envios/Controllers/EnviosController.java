@@ -1,16 +1,16 @@
 package com.sanchez.Envios.Controllers;
 
+import com.sanchez.Envios.Dto.CambioEstadoDto;
 import com.sanchez.Envios.Dto.EnvioRequestDto;
 import com.sanchez.Envios.Dto.ResponseDto;
 import com.sanchez.Envios.Models.Envios;
 import com.sanchez.Envios.Services.BoletaService;
 import com.sanchez.Envios.Services.EnviosService;
 import org.springframework.beans.factory.annotation.Autowired;
-import org.springframework.format.annotation.DateTimeFormat;
-import org.springframework.security.access.prepost.PreAuthorize;
+import org.springframework.security.core.Authentication;
+import org.springframework.security.core.context.SecurityContextHolder;
 import org.springframework.web.bind.annotation.*;
 
-import java.time.LocalDate;
 import java.util.List;
 import java.util.Map;
 import java.util.UUID;
@@ -20,71 +20,67 @@ import java.util.UUID;
 @CrossOrigin("*")
 public class EnviosController {
 
-    private EnviosService enviosService;
-    private BoletaService boletaService;
+    @Autowired private EnviosService enviosService;
+    @Autowired private BoletaService boletaService;
 
-    @Autowired
-    public EnviosController(EnviosService enviosService, BoletaService boletaService){
-        this.enviosService = enviosService;
-        this.boletaService = boletaService;
-    }
-
-    // ✅ Crear un envío (puede ser con o sin emisor)
+    /** Registrar envío (Operador / Admin de Sede / Admin General) */
     @PostMapping("/crear")
-    @PreAuthorize("hasRole('Operador')")
-    public ResponseDto<Envios> crearEnvio(@RequestBody EnvioRequestDto request) {
-        return enviosService.crearEnvio(request);
+    public ResponseDto<Envios> crear(@RequestBody EnvioRequestDto dto) {
+        Authentication auth = SecurityContextHolder.getContext().getAuthentication();
+        String correo = auth.getName();
+        String rol    = auth.getAuthorities().stream()
+                .findFirst().map(Object::toString).orElse("");
+        return enviosService.crearEnvio(dto, correo);
     }
 
-    // ✅ Listar envíos con filtros opcionales
+    /** Listar envíos (filtrado automático por rol y sede) */
     @GetMapping("/listar")
-    public ResponseDto<List<Envios>> listarEnvios(
+    public ResponseDto<List<Envios>> listar(
             @RequestParam(required = false) String estado,
-            @RequestParam(required = false) String dniReceptor,
-            @RequestParam(required = false) @DateTimeFormat(iso = DateTimeFormat.ISO.DATE) LocalDate fechaInicio,
-            @RequestParam(required = false) @DateTimeFormat(iso = DateTimeFormat.ISO.DATE) LocalDate fechaFin
-    ) {
-        return enviosService.listarEnvios(estado, dniReceptor, fechaInicio, fechaFin);
+            @RequestParam(required = false) String dniReceptor) {
+        Authentication auth = SecurityContextHolder.getContext().getAuthentication();
+        String correo = auth.getName();
+        String rol    = auth.getAuthorities().stream()
+                .findFirst().map(Object::toString).orElse("");
+        return enviosService.listarEnvios(correo, rol, estado, dniReceptor);
     }
 
-    // ✅ Buscar por código tracking
+    /** Mis envíos (para clientes logueados) */
+    @GetMapping("/mis-envios")
+    public ResponseDto<List<Envios>> misEnvios() {
+        Authentication auth = SecurityContextHolder.getContext().getAuthentication();
+        return enviosService.misEnvios(auth.getName());
+    }
+
+    /** Tracking público (sin auth) */
     @GetMapping("/tracking/{codigo}")
-    @PreAuthorize("hasRole('Operador')")
-    public ResponseDto<Envios> obtenerPorTracking(@PathVariable String codigo) {
+    public ResponseDto<Envios> tracking(@PathVariable String codigo) {
         return enviosService.buscarPorTracking(codigo);
     }
 
-    // ✅ Actualizar estado
+    /** Estados válidos para un envío específico */
+    @GetMapping("/{id}/estados-validos")
+    public ResponseDto<List<String>> estadosValidos(@PathVariable UUID id) {
+        Authentication auth = SecurityContextHolder.getContext().getAuthentication();
+        String rol = auth.getAuthorities().stream()
+                .findFirst().map(Object::toString).orElse("");
+        return enviosService.estadosPermitidos(id, rol);
+    }
+
+    /** Cambiar estado con nota opcional */
     @PutMapping("/{id}/estado")
-    @PreAuthorize("hasRole('Operador')")
-    public ResponseDto<Envios> actualizarEstado(
-            @PathVariable UUID id,
-            @RequestParam String nuevoEstado
-    ) {
-        return enviosService.cambiarEstado(id, nuevoEstado);
+    public ResponseDto<Envios> cambiarEstado(@PathVariable UUID id,
+                                              @RequestBody CambioEstadoDto dto) {
+        Authentication auth = SecurityContextHolder.getContext().getAuthentication();
+        String correo = auth.getName();
+        String rol    = auth.getAuthorities().stream()
+                .findFirst().map(Object::toString).orElse("");
+        return enviosService.cambiarEstado(id, dto, correo, rol);
     }
 
-    // ✅ Editar datos de envío (receptor o destino)
-    @PutMapping("/{id}/editar")
-    public ResponseDto<Envios> editarEnvio(
-            @PathVariable UUID id,
-            @RequestParam(required = false) String receptorNombre,
-            @RequestParam(required = false) String receptorDni,
-            @RequestParam(required = false) UUID destinoId
-    ) {
-        return enviosService.editarEnvio(id, receptorNombre, receptorDni, destinoId);
-    }
-
-    // ✅ Eliminar envío
-    @DeleteMapping("/{id}")
-    public ResponseDto<String> eliminarEnvio(@PathVariable UUID id) {
-        return enviosService.eliminarEnvio(id);
-    }
-
-    // ✅ Generar boleta/factura PDF en base64
+    /** Generar boleta/factura en base64 */
     @GetMapping("/{id}/boleta")
-    public ResponseDto<Map<String, String>> generarBoleta(@PathVariable UUID id) {
+    public ResponseDto<Map<String, String>> boleta(@PathVariable UUID id) {
         return boletaService.generarBoletaPdf(id);
     }
-
 }

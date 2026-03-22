@@ -1,213 +1,237 @@
 package com.sanchez.Envios.Services;
 
+import com.sanchez.Envios.Dto.CambioEstadoDto;
 import com.sanchez.Envios.Dto.EnvioRequestDto;
 import com.sanchez.Envios.Dto.ResponseDto;
-import com.sanchez.Envios.Models.Envios;
-import com.sanchez.Envios.Models.Tiendas;
-import com.sanchez.Envios.Models.Usuarios;
-import com.sanchez.Envios.Repositories.EnviosRepository;
-import com.sanchez.Envios.Repositories.TiendasRepository;
-import com.sanchez.Envios.Repositories.UsuariosRepository;
+import com.sanchez.Envios.Models.*;
+import com.sanchez.Envios.Repositories.*;
 import com.sanchez.Envios.Util.EmailService;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Service;
 
+import java.math.BigDecimal;
 import java.time.LocalDate;
 import java.time.LocalDateTime;
+import java.time.format.DateTimeFormatter;
 import java.util.*;
 
 @Service
 public class EnviosService {
 
-    @Autowired
-    private EnviosRepository enviosRepository;
+    // Estados válidos del sistema
+    public static final String ST_REGISTRADO          = "Registrado";
+    public static final String ST_RECIBIDO_SEDE       = "Recibido en sede";
+    public static final String ST_EN_TRANSITO         = "En tránsito";
+    public static final String ST_EN_SEDE_DESTINO     = "En sede de destino";
+    public static final String ST_LISTO_RECOGER       = "Listo para recoger";
+    public static final String ST_EN_REPARTO          = "En reparto";
+    public static final String ST_ENTREGADO           = "Entregado";
+    public static final String ST_NO_ENTREGADO        = "No entregado";
+    public static final String ST_CANCELADO           = "Cancelado";
 
-    @Autowired
-    private TiendasRepository tiendasRepository;
+    // Transiciones válidas por tipo de entrega
+    private static final Map<String, List<String>> TRANSICIONES_SEDE = new LinkedHashMap<>();
+    private static final Map<String, List<String>> TRANSICIONES_DOMICILIO = new LinkedHashMap<>();
 
-    @Autowired
-    private UsuariosRepository usuariosRepository;
+    static {
+        TRANSICIONES_SEDE.put(ST_REGISTRADO,      List.of(ST_RECIBIDO_SEDE, ST_CANCELADO));
+        TRANSICIONES_SEDE.put(ST_RECIBIDO_SEDE,   List.of(ST_EN_TRANSITO, ST_CANCELADO));
+        TRANSICIONES_SEDE.put(ST_EN_TRANSITO,     List.of(ST_EN_SEDE_DESTINO));
+        TRANSICIONES_SEDE.put(ST_EN_SEDE_DESTINO, List.of(ST_LISTO_RECOGER));
+        TRANSICIONES_SEDE.put(ST_LISTO_RECOGER,   List.of(ST_ENTREGADO));
+        TRANSICIONES_SEDE.put(ST_ENTREGADO,       Collections.emptyList());
+        TRANSICIONES_SEDE.put(ST_CANCELADO,       Collections.emptyList());
 
-    @Autowired
-    private EmailService emailService;
+        TRANSICIONES_DOMICILIO.put(ST_REGISTRADO,      List.of(ST_RECIBIDO_SEDE, ST_CANCELADO));
+        TRANSICIONES_DOMICILIO.put(ST_RECIBIDO_SEDE,   List.of(ST_EN_TRANSITO, ST_CANCELADO));
+        TRANSICIONES_DOMICILIO.put(ST_EN_TRANSITO,     List.of(ST_EN_SEDE_DESTINO));
+        TRANSICIONES_DOMICILIO.put(ST_EN_SEDE_DESTINO, List.of(ST_EN_REPARTO));
+        TRANSICIONES_DOMICILIO.put(ST_EN_REPARTO,      List.of(ST_ENTREGADO, ST_NO_ENTREGADO));
+        TRANSICIONES_DOMICILIO.put(ST_NO_ENTREGADO,    List.of(ST_EN_REPARTO));
+        TRANSICIONES_DOMICILIO.put(ST_ENTREGADO,       Collections.emptyList());
+        TRANSICIONES_DOMICILIO.put(ST_CANCELADO,       Collections.emptyList());
+    }
 
-    // =====================================================
-    // ✅ Crear un envío (con o sin emisor registrado)
-    // =====================================================
-    public ResponseDto<Envios> crearEnvio( EnvioRequestDto envioRequestDto
-    ) {
+    @Autowired private EnviosRepository enviosRepository;
+    @Autowired private TiendasRepository tiendasRepository;
+    @Autowired private UsuariosRepository usuariosRepository;
+    @Autowired private EmailService emailService;
+    @Autowired private CotizadorService cotizadorService;
+    @Autowired private BoletaService boletaService;
+
+    // ═══════════════════════════════════════════════
+    // CREAR ENVÍO
+    // ═══════════════════════════════════════════════
+    public ResponseDto<Envios> crearEnvio(EnvioRequestDto dto, String correoOperador) {
         try {
+            // 1. Obtener operador y su sede (origen automático)
+            Usuarios operador = usuariosRepository.findByCorreo(correoOperador)
+                    .orElseThrow(() -> new RuntimeException("Operador no encontrado"));
+            Tiendas origen = operador.getSede();
+            if (origen == null) {
+                return new ResponseDto<>(400, "El operador no tiene sede asignada", null);
+            }
+
+            // 2. Validaciones básicas
+            if (dto.getPeso() == null || dto.getPeso().compareTo(BigDecimal.ZERO) <= 0)
+                return new ResponseDto<>(400, "El peso es obligatorio y debe ser mayor a 0", null);
+            if (dto.getValorDeclarado() == null || dto.getValorDeclarado().compareTo(BigDecimal.ZERO) < 0)
+                return new ResponseDto<>(400, "El valor declarado es obligatorio", null);
+            if (dto.getReceptorNombre() == null || dto.getReceptorNombre().isBlank())
+                return new ResponseDto<>(400, "El nombre del receptor es obligatorio", null);
+            if (dto.getReceptorDni() == null || dto.getReceptorDni().isBlank())
+                return new ResponseDto<>(400, "El DNI/RUC del receptor es obligatorio", null);
+            if ("FACTURA".equalsIgnoreCase(dto.getTipoDocumento())) {
+                String dniEmisor = dto.getEmisorDni();
+                if (dniEmisor == null || dniEmisor.length() != 11)
+                    return new ResponseDto<>(400, "La factura requiere RUC del emisor (11 dígitos)", null);
+            }
+
+            // 3. Sede destino
             Tiendas destino = null;
-            if (envioRequestDto.getDestinoId() != null) {
-                destino = tiendasRepository.findById(envioRequestDto.getDestinoId()).orElse(null);
-            }
+            if (dto.getDestinoId() != null)
+                destino = tiendasRepository.findById(dto.getDestinoId()).orElse(null);
+            if ("SEDE".equalsIgnoreCase(dto.getTipoEntrega()) && destino == null)
+                return new ResponseDto<>(400, "Debe seleccionar una sede de destino", null);
 
-            if (destino == null) {
-                System.out.println("⚠️ No se encontró tienda destino. El envío quedará sin destino asignado.");
-            }
-            Usuarios emisor = null;
-            if (envioRequestDto.getEmisorId() != null) {
-                emisor = usuariosRepository.findById(envioRequestDto.getEmisorId()).orElse(null);
-            }
+            // 4. Calcular precio automáticamente
+            String tipoServicio = dto.getTipoServicio() != null ? dto.getTipoServicio() : "Estandar";
+            ResponseDto<Map<String, Object>> cotizacion = cotizadorService.calcularCotizacion(
+                    origen.getId(), destino != null ? destino.getId() : origen.getId(),
+                    dto.getPeso(), tipoServicio, dto.getValorDeclarado()
+            );
+            if (cotizacion.getStatusCode() != 200)
+                return new ResponseDto<>(500, "Error al calcular el precio", null);
+            BigDecimal precio = new BigDecimal(cotizacion.getData().get("precio").toString());
+            int diasEstimados = (int) cotizacion.getData().get("diasEstimados");
 
+            // 5. Emisor
+            Usuarios emisorRegistrado = null;
+            if (dto.getEmisorId() != null)
+                emisorRegistrado = usuariosRepository.findById(dto.getEmisorId()).orElse(null);
+
+            // 6. Número de documento con correlativo diario
+            String tipoDoc = dto.getTipoDocumento() != null ? dto.getTipoDocumento().toUpperCase() : "BOLETA";
+            String serie = "BOLETA".equals(tipoDoc) ? "B001" : "F001";
+            LocalDate hoy = LocalDate.now();
+            String fechaStr = hoy.format(DateTimeFormatter.ofPattern("yyyyMMdd"));
+            long correlativo = enviosRepository.countByTipoDocumentoAndFecha(tipoDoc, hoy) + 1;
+            String numeroDoc = String.format("%s-%s-%08d", serie, fechaStr, correlativo);
+
+            // 7. Construir entidad
             Envios envio = new Envios();
             envio.setCodigoTracking("PKG-" + UUID.randomUUID().toString().substring(0, 8).toUpperCase());
-
             envio.setFechaCreacion(LocalDateTime.now());
-            envio.setEstado("En tránsito");
+            envio.setEstado(ST_REGISTRADO);
+            envio.setOrigen(origen);
             envio.setDestino(destino);
-            envio.setReceptorNombre(envioRequestDto.getReceptorNombre());
-            envio.setReceptorDni(envioRequestDto.getReceptorDni());
-            envio.setReceptorRazonSocial(envioRequestDto.getReceptorRazonSocial());
-            envio.setFechaEstimada(envioRequestDto.getFechaEstimada() != null
-                    ? envioRequestDto.getFechaEstimada() : LocalDate.now().plusDays(3));
-            envio.setTipoEntrega(envioRequestDto.getTipoEntrega());
-            envio.setDireccionEntrega(envioRequestDto.getDireccionEntrega());
-            envio.setReferenciaEntrega(envioRequestDto.getReferenciaEntrega());
-
-            // Tipo de documento y precio
-            String tipoDoc = (envioRequestDto.getTipoDocumento() != null
-                    && !envioRequestDto.getTipoDocumento().isBlank())
-                    ? envioRequestDto.getTipoDocumento().toUpperCase()
-                    : "BOLETA";
+            envio.setRegistradoPor(operador);
+            envio.setTipoEntrega(dto.getTipoEntrega() != null ? dto.getTipoEntrega().toUpperCase() : "SEDE");
+            envio.setDireccionEntrega(dto.getDireccionEntrega());
+            envio.setReferenciaEntrega(dto.getReferenciaEntrega());
+            envio.setPeso(dto.getPeso());
+            envio.setValorDeclarado(dto.getValorDeclarado());
+            envio.setDescripcionPaquete(dto.getDescripcionPaquete());
+            envio.setTipoServicio(tipoServicio);
             envio.setTipoDocumento(tipoDoc);
-            envio.setDescripcionPaquete(envioRequestDto.getDescripcionPaquete());
-            envio.setPrecioEnvio(envioRequestDto.getPrecioEnvio());
+            envio.setNumeroDocumento(numeroDoc);
+            envio.setPrecioEnvio(precio);
+            envio.setReceptorNombre(dto.getReceptorNombre());
+            envio.setReceptorDni(dto.getReceptorDni());
+            envio.setReceptorRazonSocial(dto.getReceptorRazonSocial());
+            envio.setFechaEstimada(dto.getFechaEstimada() != null
+                    ? dto.getFechaEstimada()
+                    : hoy.plusDays(diasEstimados));
 
-            // Generar número de documento: B001-XXXXXXXX o F001-XXXXXXXX
-            String serie = "BOLETA".equals(tipoDoc) ? "B001" : "F001";
-            long count = enviosRepository.count() + 1;
-            envio.setNumeroDocumento(String.format("%s-%08d", serie, count));
-
-            // Si el emisor existe en sistema
-            if (emisor != null) {
-                envio.setEmisor(emisor);
-                envio.setEmisorNombre(emisor.getNombre() + " " + emisor.getApellidoP());
-                envio.setEmisorDni(emisor.getDni());
-                envio.setEmisorRazonSocial(envioRequestDto.getEmisorRazonSocial());
-                envio.setEmisorTelefono("Desconocido");
-                envio.setEmisorCorreo(emisor.getCorreo());
+            if (emisorRegistrado != null) {
+                envio.setEmisor(emisorRegistrado);
+                envio.setEmisorNombre(emisorRegistrado.getNombreCompleto());
+                envio.setEmisorDni(emisorRegistrado.getDni());
+                envio.setEmisorCorreo(emisorRegistrado.getCorreo());
             } else {
-                // Emisor no registrado
-                envio.setEmisorNombre(envioRequestDto.getEmisorNombre());
-                envio.setEmisorDni(envioRequestDto.getEmisorDni());
-                envio.setEmisorRazonSocial(envioRequestDto.getEmisorRazonSocial());
-                envio.setEmisorTelefono(envioRequestDto.getEmisorTelefono());
-                envio.setEmisorCorreo(envioRequestDto.getEmisorCorreo());
+                envio.setEmisorNombre(dto.getEmisorNombre());
+                envio.setEmisorRazonSocial(dto.getEmisorRazonSocial());
+                envio.setEmisorDni(dto.getEmisorDni());
+                envio.setEmisorTelefono(dto.getEmisorTelefono());
+                envio.setEmisorCorreo(dto.getEmisorCorreo());
             }
 
             Envios guardado = enviosRepository.save(envio);
 
-            // Enviar correo de confirmación (si tiene correo)
+            // 8. Generar PDF y enviar por correo
             if (guardado.getEmisorCorreo() != null && !guardado.getEmisorCorreo().isBlank()) {
-                String cuerpo = """
-                        <h3>Estimado(a) %s,</h3>
-                        <p>Su envío fue registrado correctamente.</p>
-                        <p><b>Código de tracking:</b> %s</p>
-                        <p><b>Documento:</b> %s N° %s</p>
-                        <p><b>Estado actual:</b> %s</p>
-                        <p>Fecha estimada de entrega: %s</p>
-                        <hr>
-                        <p>Gracias por confiar en nuestro servicio.</p>
-                        """.formatted(
-                        guardado.getEmisorNombre(),
-                        guardado.getCodigoTracking(),
-                        guardado.getTipoDocumento(),
-                        guardado.getNumeroDocumento(),
-                        guardado.getEstado(),
-                        guardado.getFechaEstimada()
-                );
-
-                emailService.enviarCorreo(
-                        guardado.getEmisorCorreo(),
-                        "Confirmación de registro de envío — " + guardado.getNumeroDocumento(),
-                        cuerpo
-                );
+                try {
+                    byte[] pdfBytes = boletaService.generarPdfBytes(guardado);
+                    String asunto = tipoDoc + " N° " + numeroDoc + " — Envios Todopais";
+                    String cuerpo = buildCorreoConfirmacion(guardado);
+                    emailService.enviarCorreoConPdf(
+                            guardado.getEmisorCorreo(), asunto, cuerpo,
+                            pdfBytes, numeroDoc + ".pdf");
+                } catch (Exception e) {
+                    System.err.println("Error al enviar correo con boleta: " + e.getMessage());
+                }
             }
 
-            return new ResponseDto<>(200, "Envío creado correctamente", guardado);
+            return new ResponseDto<>(200, "Envío registrado correctamente", guardado);
 
         } catch (Exception e) {
+            e.printStackTrace();
             return new ResponseDto<>(500, "Error al crear el envío: " + e.getMessage(), null);
         }
     }
 
-    // =====================================================
-    // ✅ Listar envíos (con filtros opcionales)
-    // =====================================================
-    public ResponseDto<List<Envios>> listarEnvios(
-            String estado,
-            String dniReceptor,
-            LocalDate fechaInicio,
-            LocalDate fechaFin
-    ) {
+    // ═══════════════════════════════════════════════
+    // CAMBIAR ESTADO (con validación de flujo)
+    // ═══════════════════════════════════════════════
+    public ResponseDto<Envios> cambiarEstado(UUID id, CambioEstadoDto dto,
+                                              String correoUsuario, String rolUsuario) {
         try {
-            List<Envios> envios = enviosRepository.findAll();
-
-            if (estado != null)
-                envios.removeIf(e -> !e.getEstado().equalsIgnoreCase(estado));
-
-            if (dniReceptor != null)
-                envios.removeIf(e -> !e.getReceptorDni().equalsIgnoreCase(dniReceptor));
-
-            if (fechaInicio != null)
-                envios.removeIf(e -> e.getFechaCreacion().toLocalDate().isBefore(fechaInicio));
-
-            if (fechaFin != null)
-                envios.removeIf(e -> e.getFechaCreacion().toLocalDate().isAfter(fechaFin));
-
-            return new ResponseDto<>(200, "Lista de envíos obtenida correctamente", envios);
-
-        } catch (Exception e) {
-            return new ResponseDto<>(500, "Error al listar envíos: " + e.getMessage(), null);
-        }
-    }
-
-    // =====================================================
-    // ✅ Buscar por código tracking
-    // =====================================================
-    public ResponseDto<Envios> buscarPorTracking(String codigo) {
-        try {
-            Optional<Envios> envio = enviosRepository.findByCodigoTracking(codigo);
-            if (envio.isEmpty())
-                return new ResponseDto<>(404, "No se encontró envío con ese código", null);
-
-            return new ResponseDto<>(200, "Envío encontrado", envio.get());
-
-        } catch (Exception e) {
-            return new ResponseDto<>(500, "Error al buscar envío: " + e.getMessage(), null);
-        }
-    }
-
-    // =====================================================
-    // ✅ Cambiar estado (notifica al emisor)
-    // =====================================================
-    public ResponseDto<Envios> cambiarEstado(UUID id, String nuevoEstado) {
-        try {
-            Optional<Envios> envioOpt = enviosRepository.findById(id);
-            if (envioOpt.isEmpty())
+            Envios envio = enviosRepository.findById(id)
+                    .orElse(null);
+            if (envio == null)
                 return new ResponseDto<>(404, "Envío no encontrado", null);
 
-            Envios envio = envioOpt.get();
+            String estadoActual = envio.getEstado();
+            String nuevoEstado = dto.getNuevoEstado();
+
+            // Validar transición según tipo de entrega
+            Map<String, List<String>> transiciones = "DOMICILIO".equalsIgnoreCase(envio.getTipoEntrega())
+                    ? TRANSICIONES_DOMICILIO : TRANSICIONES_SEDE;
+
+            List<String> permitidos = transiciones.getOrDefault(estadoActual, Collections.emptyList());
+
+            // Solo Admin General puede cancelar
+            if (ST_CANCELADO.equals(nuevoEstado)) {
+                boolean esAdminGeneral = rolUsuario != null &&
+                        rolUsuario.contains("Administrador General");
+                if (!esAdminGeneral)
+                    return new ResponseDto<>(403, "Solo el Administrador General puede cancelar envíos", null);
+                // Solo antes de En tránsito
+                if (ST_EN_TRANSITO.equals(estadoActual) || ST_EN_SEDE_DESTINO.equals(estadoActual)
+                        || ST_LISTO_RECOGER.equals(estadoActual) || ST_EN_REPARTO.equals(estadoActual)
+                        || ST_ENTREGADO.equals(estadoActual))
+                    return new ResponseDto<>(400, "No se puede cancelar un envío ya en tránsito o entregado", null);
+            } else if (!permitidos.contains(nuevoEstado)) {
+                return new ResponseDto<>(400,
+                        "Transición no permitida: '" + estadoActual + "' → '" + nuevoEstado + "'. " +
+                        "Estados válidos: " + permitidos, null);
+            }
+
+            // Nota obligatoria en "No entregado"
+            if (ST_NO_ENTREGADO.equals(nuevoEstado) &&
+                    (dto.getNota() == null || dto.getNota().isBlank()))
+                return new ResponseDto<>(400, "Debe indicar el motivo de no entrega", null);
+
             envio.setEstado(nuevoEstado);
+            envio.setNotaEstado(dto.getNota());
             envio.setFechaActualizacion(LocalDateTime.now());
             Envios actualizado = enviosRepository.save(envio);
 
-            // Enviar correo de actualización
-            if (envio.getEmisorCorreo() != null && !envio.getEmisorCorreo().isBlank()) {
-                String cuerpo = """
-                        <h3>Actualización de estado del envío</h3>
-                        <p>El estado de su envío con código <b>%s</b> ha cambiado a:</p>
-                        <p><b>%s</b></p>
-                        <hr>
-                        <p>Gracias por confiar en nosotros.</p>
-                        """.formatted(envio.getCodigoTracking(), nuevoEstado);
-
-                emailService.enviarCorreo(
-                        envio.getEmisorCorreo(),
-                        "Actualización de estado del envío",
-                        cuerpo
-                );
+            // Notificar al emisor por correo
+            if (actualizado.getEmisorCorreo() != null && !actualizado.getEmisorCorreo().isBlank()) {
+                String cuerpo = buildCorreoEstado(actualizado);
+                emailService.enviarCorreo(actualizado.getEmisorCorreo(),
+                        "Actualización de tu envío " + actualizado.getCodigoTracking(), cuerpo);
             }
 
             return new ResponseDto<>(200, "Estado actualizado correctamente", actualizado);
@@ -217,46 +241,144 @@ public class EnviosService {
         }
     }
 
-    // =====================================================
-    // ✅ Editar datos del envío
-    // =====================================================
-    public ResponseDto<Envios> editarEnvio(UUID id, String receptorNombre, String receptorDni, UUID destinoId) {
+    // ═══════════════════════════════════════════════
+    // LISTAR (filtrado por sede del usuario)
+    // ═══════════════════════════════════════════════
+    public ResponseDto<List<Envios>> listarEnvios(String correoUsuario, String rolUsuario,
+                                                   String estado, String dniReceptor) {
         try {
-            Optional<Envios> envioOpt = enviosRepository.findById(id);
-            if (envioOpt.isEmpty())
-                return new ResponseDto<>(404, "Envío no encontrado", null);
+            List<Envios> envios;
+            boolean esAdminGeneral = rolUsuario != null && rolUsuario.contains("Administrador General");
 
-            Envios envio = envioOpt.get();
-
-            if (receptorNombre != null) envio.setReceptorNombre(receptorNombre);
-            if (receptorDni != null) envio.setReceptorDni(receptorDni);
-            if (destinoId != null) {
-                Tiendas destino = tiendasRepository.findById(destinoId).orElse(null);
-                if (destino != null) envio.setDestino(destino);
+            if (esAdminGeneral) {
+                envios = enviosRepository.findAll();
+            } else {
+                Usuarios usuario = usuariosRepository.findByCorreo(correoUsuario).orElse(null);
+                if (usuario != null && usuario.getSede() != null) {
+                    envios = enviosRepository.findByOrigenOrDestino(
+                            usuario.getSede(), usuario.getSede());
+                } else {
+                    envios = Collections.emptyList();
+                }
             }
 
-            envio.setFechaActualizacion(LocalDateTime.now());
-            Envios actualizado = enviosRepository.save(envio);
+            if (estado != null && !estado.isBlank())
+                envios = envios.stream()
+                        .filter(e -> estado.equalsIgnoreCase(e.getEstado()))
+                        .toList();
+            if (dniReceptor != null && !dniReceptor.isBlank())
+                envios = envios.stream()
+                        .filter(e -> dniReceptor.equalsIgnoreCase(e.getReceptorDni()))
+                        .toList();
 
-            return new ResponseDto<>(200, "Datos de envío actualizados", actualizado);
-
+            return new ResponseDto<>(200, "OK", envios);
         } catch (Exception e) {
-            return new ResponseDto<>(500, "Error al editar envío: " + e.getMessage(), null);
+            return new ResponseDto<>(500, "Error: " + e.getMessage(), null);
         }
     }
 
-    // =====================================================
-    // ✅ Eliminar envío
-    // =====================================================
-    public ResponseDto<String> eliminarEnvio(UUID id) {
+    // ═══════════════════════════════════════════════
+    // MIS ENVÍOS (para clientes logueados)
+    // ═══════════════════════════════════════════════
+    public ResponseDto<List<Envios>> misEnvios(String correoUsuario) {
         try {
-            if (!enviosRepository.existsById(id))
-                return new ResponseDto<>(404, "El envío no existe", null);
-
-            enviosRepository.deleteById(id);
-            return new ResponseDto<>(200, "Envío eliminado correctamente", "OK");
+            Usuarios usuario = usuariosRepository.findByCorreo(correoUsuario)
+                    .orElseThrow(() -> new RuntimeException("Usuario no encontrado"));
+            List<Envios> envios = enviosRepository.findByEmisor(usuario);
+            return new ResponseDto<>(200, "OK", envios);
         } catch (Exception e) {
-            return new ResponseDto<>(500, "Error al eliminar envío: " + e.getMessage(), null);
+            return new ResponseDto<>(500, "Error: " + e.getMessage(), null);
         }
+    }
+
+    // ═══════════════════════════════════════════════
+    // TRACKING PÚBLICO
+    // ═══════════════════════════════════════════════
+    public ResponseDto<Envios> buscarPorTracking(String codigo) {
+        try {
+            return enviosRepository.findByCodigoTracking(codigo)
+                    .map(e -> new ResponseDto<>(200, "Envío encontrado", e))
+                    .orElse(new ResponseDto<>(404, "No se encontró envío con ese código", null));
+        } catch (Exception e) {
+            return new ResponseDto<>(500, "Error: " + e.getMessage(), null);
+        }
+    }
+
+    // ═══════════════════════════════════════════════
+    // ESTADOS VÁLIDOS PARA UN ENVÍO
+    // ═══════════════════════════════════════════════
+    public ResponseDto<List<String>> estadosPermitidos(UUID id, String rolUsuario) {
+        try {
+            Envios envio = enviosRepository.findById(id).orElse(null);
+            if (envio == null) return new ResponseDto<>(404, "Envío no encontrado", null);
+
+            Map<String, List<String>> transiciones = "DOMICILIO".equalsIgnoreCase(envio.getTipoEntrega())
+                    ? TRANSICIONES_DOMICILIO : TRANSICIONES_SEDE;
+
+            List<String> estados = new ArrayList<>(
+                    transiciones.getOrDefault(envio.getEstado(), Collections.emptyList()));
+
+            // Agregar Cancelado si es Admin General y el envío aún no salió
+            boolean esAdminGeneral = rolUsuario != null && rolUsuario.contains("Administrador General");
+            boolean puedeCancelar = !List.of(ST_EN_TRANSITO, ST_EN_SEDE_DESTINO,
+                    ST_LISTO_RECOGER, ST_EN_REPARTO, ST_ENTREGADO, ST_CANCELADO)
+                    .contains(envio.getEstado());
+            if (esAdminGeneral && puedeCancelar && !estados.contains(ST_CANCELADO))
+                estados.add(ST_CANCELADO);
+
+            return new ResponseDto<>(200, "OK", estados);
+        } catch (Exception e) {
+            return new ResponseDto<>(500, "Error: " + e.getMessage(), null);
+        }
+    }
+
+    // ═══════════════════════════════════════════════
+    // HELPERS DE CORREO
+    // ═══════════════════════════════════════════════
+    private String buildCorreoConfirmacion(Envios e) {
+        return """
+            <div style="font-family:Arial,sans-serif;max-width:600px;margin:0 auto">
+              <div style="background:#1a56db;padding:24px;border-radius:12px 12px 0 0">
+                <h2 style="color:#fff;margin:0">✅ Envío registrado</h2>
+              </div>
+              <div style="background:#f8fafc;padding:24px;border-radius:0 0 12px 12px">
+                <p>Hola <strong>%s</strong>,</p>
+                <p>Tu envío ha sido registrado exitosamente.</p>
+                <table style="width:100%%;border-collapse:collapse;margin:16px 0">
+                  <tr><td style="padding:8px;color:#64748b">Código tracking</td>
+                      <td style="padding:8px;font-weight:700;color:#f59e0b">%s</td></tr>
+                  <tr><td style="padding:8px;color:#64748b">Documento</td>
+                      <td style="padding:8px">%s N° %s</td></tr>
+                  <tr><td style="padding:8px;color:#64748b">Estado</td>
+                      <td style="padding:8px">%s</td></tr>
+                  <tr><td style="padding:8px;color:#64748b">Entrega estimada</td>
+                      <td style="padding:8px">%s</td></tr>
+                </table>
+                <p style="color:#64748b;font-size:12px">Se adjunta tu %s como comprobante.</p>
+                <p style="color:#94a3b8;font-size:11px">© 2025 Envios Todopais</p>
+              </div>
+            </div>
+            """.formatted(
+                e.getEmisorNombre(), e.getCodigoTracking(),
+                e.getTipoDocumento(), e.getNumeroDocumento(),
+                e.getEstado(), e.getFechaEstimada(), e.getTipoDocumento().toLowerCase());
+    }
+
+    private String buildCorreoEstado(Envios e) {
+        String nota = (e.getNotaEstado() != null && !e.getNotaEstado().isBlank())
+                ? "<p><strong>Nota:</strong> " + e.getNotaEstado() + "</p>" : "";
+        return """
+            <div style="font-family:Arial,sans-serif;max-width:600px;margin:0 auto">
+              <div style="background:#1e293b;padding:24px;border-radius:12px 12px 0 0">
+                <h2 style="color:#f59e0b;margin:0">📦 Actualización de tu envío</h2>
+              </div>
+              <div style="background:#f8fafc;padding:24px;border-radius:0 0 12px 12px">
+                <p>El estado de tu envío <strong>%s</strong> ha cambiado a:</p>
+                <h3 style="color:#1a56db">%s</h3>
+                %s
+                <p style="color:#94a3b8;font-size:11px">© 2025 Envios Todopais</p>
+              </div>
+            </div>
+            """.formatted(e.getCodigoTracking(), e.getEstado(), nota);
     }
 }

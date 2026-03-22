@@ -46,6 +46,7 @@ public class BoletaService {
     private static final DeviceRgb COLOR_TEXT_DARK   = new DeviceRgb(15, 23, 42);
     private static final DeviceRgb COLOR_SUCCESS     = new DeviceRgb(21, 128, 61);
     private static final DeviceRgb COLOR_SUCCESS_BG  = new DeviceRgb(220, 252, 231);
+    private static final DeviceRgb COLOR_WHITE       = new DeviceRgb(255, 255, 255);
 
     public ResponseDto<Map<String, String>> generarBoletaPdf(UUID envioId) {
         try {
@@ -69,6 +70,11 @@ public class BoletaService {
             e.printStackTrace();
             return new ResponseDto<>(500, "Error al generar el documento: " + e.getMessage(), null);
         }
+    }
+
+    /** Genera el PDF y lo devuelve como bytes (para adjuntar en correo) */
+    public byte[] generarPdfBytes(Envios envio) throws Exception {
+        return buildPdf(envio);
     }
 
     private byte[] buildPdf(Envios envio) throws Exception {
@@ -315,7 +321,7 @@ public class BoletaService {
 
     private void addDetalleRow(Table table, PdfFont regular, String concepto,
                                 String descripcion, BigDecimal importe, boolean shaded) {
-        DeviceRgb bg = shaded ? COLOR_GRAY_BG : ColorConstants.WHITE;
+        DeviceRgb bg = shaded ? COLOR_GRAY_BG : COLOR_WHITE;
 
         table.addCell(new Cell()
                 .setBackgroundColor(bg)
