@@ -3,6 +3,7 @@ package com.sanchez.Envios.Controllers;
 import com.sanchez.Envios.Dto.EnvioRequestDto;
 import com.sanchez.Envios.Dto.ResponseDto;
 import com.sanchez.Envios.Models.Envios;
+import com.sanchez.Envios.Services.BoletaService;
 import com.sanchez.Envios.Services.EnviosService;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.format.annotation.DateTimeFormat;
@@ -20,10 +21,12 @@ import java.util.UUID;
 public class EnviosController {
 
     private EnviosService enviosService;
+    private BoletaService boletaService;
 
     @Autowired
-    public EnviosController(EnviosService enviosService){
-        this.enviosService=enviosService;
+    public EnviosController(EnviosService enviosService, BoletaService boletaService){
+        this.enviosService = enviosService;
+        this.boletaService = boletaService;
     }
 
     // ✅ Crear un envío (puede ser con o sin emisor)
@@ -76,6 +79,12 @@ public class EnviosController {
     @DeleteMapping("/{id}")
     public ResponseDto<String> eliminarEnvio(@PathVariable UUID id) {
         return enviosService.eliminarEnvio(id);
+    }
+
+    // ✅ Generar boleta/factura PDF en base64
+    @GetMapping("/{id}/boleta")
+    public ResponseDto<Map<String, String>> generarBoleta(@PathVariable UUID id) {
+        return boletaService.generarBoletaPdf(id);
     }
 
 }

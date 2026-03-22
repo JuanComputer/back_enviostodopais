@@ -52,29 +52,48 @@ public class EnviosService {
 
             Envios envio = new Envios();
             envio.setCodigoTracking("PKG-" + UUID.randomUUID().toString().substring(0, 8).toUpperCase());
-//            "PKG-CC39f747
 
-           envio.setFechaCreacion(LocalDateTime.now());
-
+            envio.setFechaCreacion(LocalDateTime.now());
             envio.setEstado("En tránsito");
             envio.setDestino(destino);
             envio.setReceptorNombre(envioRequestDto.getReceptorNombre());
             envio.setReceptorDni(envioRequestDto.getReceptorDni());
-            envio.setFechaEstimada(envioRequestDto.getFechaEstimada() != null ? envioRequestDto.getFechaEstimada() : LocalDate.now().plusDays(3));
+            envio.setReceptorRazonSocial(envioRequestDto.getReceptorRazonSocial());
+            envio.setFechaEstimada(envioRequestDto.getFechaEstimada() != null
+                    ? envioRequestDto.getFechaEstimada() : LocalDate.now().plusDays(3));
+            envio.setTipoEntrega(envioRequestDto.getTipoEntrega());
+            envio.setDireccionEntrega(envioRequestDto.getDireccionEntrega());
+            envio.setReferenciaEntrega(envioRequestDto.getReferenciaEntrega());
+
+            // Tipo de documento y precio
+            String tipoDoc = (envioRequestDto.getTipoDocumento() != null
+                    && !envioRequestDto.getTipoDocumento().isBlank())
+                    ? envioRequestDto.getTipoDocumento().toUpperCase()
+                    : "BOLETA";
+            envio.setTipoDocumento(tipoDoc);
+            envio.setDescripcionPaquete(envioRequestDto.getDescripcionPaquete());
+            envio.setPrecioEnvio(envioRequestDto.getPrecioEnvio());
+
+            // Generar número de documento: B001-XXXXXXXX o F001-XXXXXXXX
+            String serie = "BOLETA".equals(tipoDoc) ? "B001" : "F001";
+            long count = enviosRepository.count() + 1;
+            envio.setNumeroDocumento(String.format("%s-%08d", serie, count));
 
             // Si el emisor existe en sistema
             if (emisor != null) {
                 envio.setEmisor(emisor);
                 envio.setEmisorNombre(emisor.getNombre() + " " + emisor.getApellidoP());
                 envio.setEmisorDni(emisor.getDni());
+                envio.setEmisorRazonSocial(envioRequestDto.getEmisorRazonSocial());
                 envio.setEmisorTelefono("Desconocido");
                 envio.setEmisorCorreo(emisor.getCorreo());
             } else {
                 // Emisor no registrado
                 envio.setEmisorNombre(envioRequestDto.getEmisorNombre());
                 envio.setEmisorDni(envioRequestDto.getEmisorDni());
+                envio.setEmisorRazonSocial(envioRequestDto.getEmisorRazonSocial());
                 envio.setEmisorTelefono(envioRequestDto.getEmisorTelefono());
-                envio.setEmisorCorreo(envioRequestDto.getEmisorCorreo()); // se puede extender a parámetro
+                envio.setEmisorCorreo(envioRequestDto.getEmisorCorreo());
             }
 
             Envios guardado = enviosRepository.save(envio);
@@ -85,6 +104,7 @@ public class EnviosService {
                         <h3>Estimado(a) %s,</h3>
                         <p>Su envío fue registrado correctamente.</p>
                         <p><b>Código de tracking:</b> %s</p>
+                        <p><b>Documento:</b> %s N° %s</p>
                         <p><b>Estado actual:</b> %s</p>
                         <p>Fecha estimada de entrega: %s</p>
                         <hr>
@@ -92,13 +112,15 @@ public class EnviosService {
                         """.formatted(
                         guardado.getEmisorNombre(),
                         guardado.getCodigoTracking(),
+                        guardado.getTipoDocumento(),
+                        guardado.getNumeroDocumento(),
                         guardado.getEstado(),
                         guardado.getFechaEstimada()
                 );
 
                 emailService.enviarCorreo(
                         guardado.getEmisorCorreo(),
-                        "Confirmación de registro de envío",
+                        "Confirmación de registro de envío — " + guardado.getNumeroDocumento(),
                         cuerpo
                 );
             }

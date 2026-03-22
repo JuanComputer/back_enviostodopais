@@ -1,0 +1,14 @@
+FROM gradle:8.6-jdk17
+
+WORKDIR /app
+
+# solo copia wrapper y build config para aprovechar cache
+COPY build.gradle settings.gradle gradlew ./
+COPY gradle ./gradle
+
+RUN gradle tasks || true
+
+# el código se montará por volumen
+EXPOSE 8080
+
+CMD ["./gradlew", "bootRun"]
