@@ -5,6 +5,8 @@ RUN chmod +x ./gradlew
 RUN ./gradlew clean bootJar
 
 FROM eclipse-temurin:17-jdk-alpine
+RUN apk add --no-cache ca-certificates
+
 WORKDIR /app
 COPY --from=build /app/build/libs/*.jar app.jar
 
