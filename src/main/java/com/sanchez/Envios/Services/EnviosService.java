@@ -200,12 +200,14 @@ public class EnviosService {
 
             List<String> permitidos = TRANSICIONES.getOrDefault(estadoActual, Collections.emptyList());
 
-            // Solo Admin General puede cancelar
+            // Cancelar: permitido para Administrador General y Administrador de Sede
             if (ST_CANCELADO.equals(nuevoEstado)) {
-                boolean esAdminGeneral = rolUsuario != null &&
-                        rolUsuario.contains("Administrador General");
-                if (!esAdminGeneral)
-                    return new ResponseDto<>(403, "Solo el Administrador General puede cancelar envíos", null);
+                boolean puedeCancelarRol = rolUsuario != null &&
+                        (rolUsuario.contains("Administrador General") ||
+                         rolUsuario.contains("Administrador de Sede"));
+                if (!puedeCancelarRol)
+                    return new ResponseDto<>(403,
+                            "Solo un Administrador (General o de Sede) puede cancelar envíos", null);
                 // Solo antes de En tránsito (o desde Con problemas)
                 if (ST_EN_TRANSITO.equals(estadoActual) || ST_RETRASADO.equals(estadoActual)
                         || ST_ENTREGADO.equals(estadoActual))
@@ -314,11 +316,13 @@ public class EnviosService {
             List<String> estados = new ArrayList<>(
                     TRANSICIONES.getOrDefault(envio.getEstado(), Collections.emptyList()));
 
-            // Agregar Cancelado si es Admin General y el envío aún no salió
-            boolean esAdminGeneral = rolUsuario != null && rolUsuario.contains("Administrador General");
+            // Agregar Cancelado si es Admin General o Admin de Sede y el envío aún no salió
+            boolean puedeCancelarRol = rolUsuario != null &&
+                    (rolUsuario.contains("Administrador General") ||
+                     rolUsuario.contains("Administrador de Sede"));
             boolean puedeCancelar = !List.of(ST_EN_TRANSITO, ST_RETRASADO, ST_ENTREGADO, ST_CANCELADO)
                     .contains(envio.getEstado());
-            if (esAdminGeneral && puedeCancelar && !estados.contains(ST_CANCELADO))
+            if (puedeCancelarRol && puedeCancelar && !estados.contains(ST_CANCELADO))
                 estados.add(ST_CANCELADO);
 
             return new ResponseDto<>(200, "OK", estados);
