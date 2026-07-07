@@ -18,7 +18,6 @@ import java.util.stream.Collectors;
 
 @RestController
 @RequestMapping("/api/reportes")
-@CrossOrigin("*")
 public class ReportesController {
 
     @Autowired private EnviosRepository enviosRepository;

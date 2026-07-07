@@ -17,7 +17,6 @@ import java.util.UUID;
 
 @RestController
 @RequestMapping("/api/envios")
-@CrossOrigin("*")
 public class EnviosController {
 
     @Autowired private EnviosService enviosService;
