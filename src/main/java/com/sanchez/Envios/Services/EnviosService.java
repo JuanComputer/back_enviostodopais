@@ -18,38 +18,36 @@ import java.util.*;
 @Service
 public class EnviosService {
 
-    // Estados válidos del sistema
-    public static final String ST_REGISTRADO          = "Registrado";
-    public static final String ST_RECIBIDO_SEDE       = "Recibido en sede";
-    public static final String ST_EN_TRANSITO         = "En tránsito";
-    public static final String ST_EN_SEDE_DESTINO     = "En sede de destino";
-    public static final String ST_LISTO_RECOGER       = "Listo para recoger";
-    public static final String ST_EN_REPARTO          = "En reparto";
-    public static final String ST_ENTREGADO           = "Entregado";
-    public static final String ST_NO_ENTREGADO        = "No entregado";
-    public static final String ST_CANCELADO           = "Cancelado";
+    // Estados válidos del sistema — DEBEN coincidir exactamente con el
+    // CHECK constraint de tb_envios.tb_envios_estado en la base de datos:
+    // CHECK (tb_envios_estado IN ('Registrado','Recibido en sede','Cancelado',
+    //        'En tránsito','Entregado','Retrasado','Con problemas'))
+    public static final String ST_REGISTRADO       = "Registrado";
+    public static final String ST_RECIBIDO_SEDE    = "Recibido en sede";
+    public static final String ST_EN_TRANSITO      = "En tránsito";
+    public static final String ST_RETRASADO        = "Retrasado";
+    public static final String ST_CON_PROBLEMAS    = "Con problemas";
+    public static final String ST_ENTREGADO        = "Entregado";
+    public static final String ST_CANCELADO        = "Cancelado";
 
-    // Transiciones válidas por tipo de entrega
-    private static final Map<String, List<String>> TRANSICIONES_SEDE = new LinkedHashMap<>();
-    private static final Map<String, List<String>> TRANSICIONES_DOMICILIO = new LinkedHashMap<>();
+    // Todos los estados válidos (para validar contra la BD antes de guardar)
+    public static final Set<String> ESTADOS_VALIDOS = Set.of(
+            ST_REGISTRADO, ST_RECIBIDO_SEDE, ST_EN_TRANSITO,
+            ST_RETRASADO, ST_CON_PROBLEMAS, ST_ENTREGADO, ST_CANCELADO);
+
+    // Transiciones válidas — un único flujo (ya no depende del tipo de entrega,
+    // porque los estados intermedios "En sede de destino / Listo para recoger /
+    // En reparto / No entregado" no existen en la base de datos)
+    private static final Map<String, List<String>> TRANSICIONES = new LinkedHashMap<>();
 
     static {
-        TRANSICIONES_SEDE.put(ST_REGISTRADO,      List.of(ST_RECIBIDO_SEDE, ST_CANCELADO));
-        TRANSICIONES_SEDE.put(ST_RECIBIDO_SEDE,   List.of(ST_EN_TRANSITO, ST_CANCELADO));
-        TRANSICIONES_SEDE.put(ST_EN_TRANSITO,     List.of(ST_EN_SEDE_DESTINO));
-        TRANSICIONES_SEDE.put(ST_EN_SEDE_DESTINO, List.of(ST_LISTO_RECOGER));
-        TRANSICIONES_SEDE.put(ST_LISTO_RECOGER,   List.of(ST_ENTREGADO));
-        TRANSICIONES_SEDE.put(ST_ENTREGADO,       Collections.emptyList());
-        TRANSICIONES_SEDE.put(ST_CANCELADO,       Collections.emptyList());
-
-        TRANSICIONES_DOMICILIO.put(ST_REGISTRADO,      List.of(ST_RECIBIDO_SEDE, ST_CANCELADO));
-        TRANSICIONES_DOMICILIO.put(ST_RECIBIDO_SEDE,   List.of(ST_EN_TRANSITO, ST_CANCELADO));
-        TRANSICIONES_DOMICILIO.put(ST_EN_TRANSITO,     List.of(ST_EN_SEDE_DESTINO));
-        TRANSICIONES_DOMICILIO.put(ST_EN_SEDE_DESTINO, List.of(ST_EN_REPARTO));
-        TRANSICIONES_DOMICILIO.put(ST_EN_REPARTO,      List.of(ST_ENTREGADO, ST_NO_ENTREGADO));
-        TRANSICIONES_DOMICILIO.put(ST_NO_ENTREGADO,    List.of(ST_EN_REPARTO));
-        TRANSICIONES_DOMICILIO.put(ST_ENTREGADO,       Collections.emptyList());
-        TRANSICIONES_DOMICILIO.put(ST_CANCELADO,       Collections.emptyList());
+        TRANSICIONES.put(ST_REGISTRADO,    List.of(ST_RECIBIDO_SEDE, ST_CANCELADO));
+        TRANSICIONES.put(ST_RECIBIDO_SEDE, List.of(ST_EN_TRANSITO, ST_CANCELADO));
+        TRANSICIONES.put(ST_EN_TRANSITO,   List.of(ST_ENTREGADO, ST_RETRASADO, ST_CON_PROBLEMAS));
+        TRANSICIONES.put(ST_RETRASADO,     List.of(ST_EN_TRANSITO, ST_ENTREGADO, ST_CON_PROBLEMAS));
+        TRANSICIONES.put(ST_CON_PROBLEMAS, List.of(ST_EN_TRANSITO, ST_CANCELADO));
+        TRANSICIONES.put(ST_ENTREGADO,     Collections.emptyList());
+        TRANSICIONES.put(ST_CANCELADO,     Collections.emptyList());
     }
 
     @Autowired private EnviosRepository enviosRepository;
@@ -194,11 +192,13 @@ public class EnviosService {
             String estadoActual = envio.getEstado();
             String nuevoEstado = dto.getNuevoEstado();
 
-            // Validar transición según tipo de entrega
-            Map<String, List<String>> transiciones = "DOMICILIO".equalsIgnoreCase(envio.getTipoEntrega())
-                    ? TRANSICIONES_DOMICILIO : TRANSICIONES_SEDE;
+            // Validar que el estado solicitado exista en el sistema (y en el
+            // CHECK constraint de la BD) antes de intentar nada más
+            if (nuevoEstado == null || !ESTADOS_VALIDOS.contains(nuevoEstado))
+                return new ResponseDto<>(400,
+                        "Estado inválido: '" + nuevoEstado + "'. Estados válidos: " + ESTADOS_VALIDOS, null);
 
-            List<String> permitidos = transiciones.getOrDefault(estadoActual, Collections.emptyList());
+            List<String> permitidos = TRANSICIONES.getOrDefault(estadoActual, Collections.emptyList());
 
             // Solo Admin General puede cancelar
             if (ST_CANCELADO.equals(nuevoEstado)) {
@@ -206,9 +206,8 @@ public class EnviosService {
                         rolUsuario.contains("Administrador General");
                 if (!esAdminGeneral)
                     return new ResponseDto<>(403, "Solo el Administrador General puede cancelar envíos", null);
-                // Solo antes de En tránsito
-                if (ST_EN_TRANSITO.equals(estadoActual) || ST_EN_SEDE_DESTINO.equals(estadoActual)
-                        || ST_LISTO_RECOGER.equals(estadoActual) || ST_EN_REPARTO.equals(estadoActual)
+                // Solo antes de En tránsito (o desde Con problemas)
+                if (ST_EN_TRANSITO.equals(estadoActual) || ST_RETRASADO.equals(estadoActual)
                         || ST_ENTREGADO.equals(estadoActual))
                     return new ResponseDto<>(400, "No se puede cancelar un envío ya en tránsito o entregado", null);
             } else if (!permitidos.contains(nuevoEstado)) {
@@ -217,10 +216,10 @@ public class EnviosService {
                         "Estados válidos: " + permitidos, null);
             }
 
-            // Nota obligatoria en "No entregado"
-            if (ST_NO_ENTREGADO.equals(nuevoEstado) &&
+            // Nota obligatoria al marcar "Con problemas"
+            if (ST_CON_PROBLEMAS.equals(nuevoEstado) &&
                     (dto.getNota() == null || dto.getNota().isBlank()))
-                return new ResponseDto<>(400, "Debe indicar el motivo de no entrega", null);
+                return new ResponseDto<>(400, "Debe indicar el detalle del problema", null);
 
             envio.setEstado(nuevoEstado);
             envio.setNotaEstado(dto.getNota());
@@ -312,16 +311,12 @@ public class EnviosService {
             Envios envio = enviosRepository.findById(id).orElse(null);
             if (envio == null) return new ResponseDto<>(404, "Envío no encontrado", null);
 
-            Map<String, List<String>> transiciones = "DOMICILIO".equalsIgnoreCase(envio.getTipoEntrega())
-                    ? TRANSICIONES_DOMICILIO : TRANSICIONES_SEDE;
-
             List<String> estados = new ArrayList<>(
-                    transiciones.getOrDefault(envio.getEstado(), Collections.emptyList()));
+                    TRANSICIONES.getOrDefault(envio.getEstado(), Collections.emptyList()));
 
             // Agregar Cancelado si es Admin General y el envío aún no salió
             boolean esAdminGeneral = rolUsuario != null && rolUsuario.contains("Administrador General");
-            boolean puedeCancelar = !List.of(ST_EN_TRANSITO, ST_EN_SEDE_DESTINO,
-                    ST_LISTO_RECOGER, ST_EN_REPARTO, ST_ENTREGADO, ST_CANCELADO)
+            boolean puedeCancelar = !List.of(ST_EN_TRANSITO, ST_RETRASADO, ST_ENTREGADO, ST_CANCELADO)
                     .contains(envio.getEstado());
             if (esAdminGeneral && puedeCancelar && !estados.contains(ST_CANCELADO))
                 estados.add(ST_CANCELADO);

@@ -52,6 +52,11 @@ public class UsuariosController {
         return usuariosService.toggleActivo(id, rol());
     }
 
+    @DeleteMapping("/{id}")
+    public ResponseDto<Void> eliminar(@PathVariable UUID id) {
+        return usuariosService.eliminar(id, correo(), rol());
+    }
+
     @GetMapping("/estadisticas")
     public ResponseDto<Map<String, Object>> estadisticas() {
         return usuariosService.estadisticas(correo(), rol());

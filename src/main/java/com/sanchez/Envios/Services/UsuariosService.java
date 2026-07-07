@@ -22,6 +22,7 @@ public class UsuariosService {
     @Autowired private UsuariosRepository usuariosRepository;
     @Autowired private RolesRepository rolesRepository;
     @Autowired private TiendasRepository tiendasRepository;
+    @Autowired private com.sanchez.Envios.Repositories.EnviosRepository enviosRepository;
     @Autowired private PasswordEncoder passwordEncoder;
     @Autowired private EmailService emailService;
 
@@ -166,6 +167,22 @@ public class UsuariosService {
             if (dto.getApellidoM() != null) u.setApellidoM(dto.getApellidoM());
             if (dto.getActivo()    != null) u.setActivo(dto.getActivo());
 
+            // Cambio de correo — validar formato básico y que no esté en uso por otro usuario
+            if (dto.getCorreo() != null && !dto.getCorreo().isBlank()
+                    && !dto.getCorreo().equalsIgnoreCase(u.getCorreo())) {
+                Optional<Usuarios> existente = usuariosRepository.findByCorreo(dto.getCorreo());
+                if (existente.isPresent() && !existente.get().getId().equals(u.getId()))
+                    return new ResponseDto<>(409, "El correo ya está registrado por otro usuario", null);
+                u.setCorreo(dto.getCorreo());
+            }
+
+            // Cambio de contraseña — opcional, solo si se envía un valor
+            if (dto.getPassword() != null && !dto.getPassword().isBlank()) {
+                if (dto.getPassword().length() < 6)
+                    return new ResponseDto<>(400, "La contraseña debe tener al menos 6 caracteres", null);
+                u.setPassword(passwordEncoder.encode(dto.getPassword()));
+            }
+
             // Cambio de sede
             if (dto.getSedeId() != null) {
                 Tiendas sede = tiendasRepository.findById(dto.getSedeId()).orElse(null);
@@ -214,6 +231,47 @@ public class UsuariosService {
             updated.setPassword(null);
             return new ResponseDto<>(200,
                     u.getActivo() ? "Usuario activado" : "Usuario desactivado", updated);
+
+        } catch (Exception e) {
+            return new ResponseDto<>(500, "Error: " + e.getMessage(), null);
+        }
+    }
+
+    // ═══════════════════════════════════════
+    // ELIMINAR USUARIO
+    // ═══════════════════════════════════════
+    public ResponseDto<Void> eliminar(UUID id, String correoSolicitante, String rolSolicitante) {
+        try {
+            Usuarios u = usuariosRepository.findById(id).orElse(null);
+            if (u == null) return new ResponseDto<>(404, "Usuario no encontrado", null);
+
+            boolean esAdminGeneral = rolSolicitante != null &&
+                    rolSolicitante.contains("Administrador General");
+
+            // Admin de Sede no puede borrar Admins Generales ni otros Admins de Sede
+            if (!esAdminGeneral) {
+                String rolTarget = u.getRol().getNombre();
+                if (rolTarget.equals("Administrador General") ||
+                        rolTarget.equals("Administrador de Sede"))
+                    return new ResponseDto<>(403,
+                            "No tienes permiso para eliminar este usuario", null);
+            }
+
+            // No permitir auto-eliminación
+            if (u.getCorreo() != null && u.getCorreo().equalsIgnoreCase(correoSolicitante))
+                return new ResponseDto<>(400, "No puedes eliminar tu propia cuenta", null);
+
+            // Si el usuario tiene envíos asociados (como operador que los registró
+            // o como emisor), no se puede borrar en duro sin romper el historial:
+            // se sugiere desactivar en su lugar.
+            boolean tieneEnvios = enviosRepository.existsByRegistradoPorOrEmisor(u, u);
+            if (tieneEnvios)
+                return new ResponseDto<>(409,
+                        "No se puede eliminar: el usuario tiene envíos asociados. " +
+                        "Desactívalo en su lugar para conservar el historial.", null);
+
+            usuariosRepository.delete(u);
+            return new ResponseDto<>(200, "Usuario eliminado correctamente", null);
 
         } catch (Exception e) {
             return new ResponseDto<>(500, "Error: " + e.getMessage(), null);

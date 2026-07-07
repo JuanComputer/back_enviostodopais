@@ -22,6 +22,9 @@ public interface EnviosRepository extends JpaRepository<Envios, UUID> {
     // Envíos donde el emisor es un usuario registrado
     List<Envios> findByEmisor(Usuarios emisor);
 
+    // Usado para bloquear el borrado de usuarios con historial de envíos
+    boolean existsByRegistradoPorOrEmisor(Usuarios registradoPor, Usuarios emisor);
+
     // Contar envíos del día para numeración correlativa
     @Query("SELECT COUNT(e) FROM Envios e WHERE e.tipoDocumento = :tipo " +
            "AND CAST(e.fechaCreacion AS date) = :fecha")
