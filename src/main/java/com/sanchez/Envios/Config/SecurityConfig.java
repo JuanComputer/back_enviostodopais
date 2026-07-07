@@ -1,3 +1,23 @@
+package com.sanchez.Envios.Config;
+
+import com.sanchez.Envios.Security.CustomUserDetailsService;
+import com.sanchez.Envios.Security.JwtAuthenticationFilter;
+import org.springframework.context.annotation.*;
+import org.springframework.http.HttpMethod;
+import org.springframework.security.authentication.AuthenticationManager;
+import org.springframework.security.config.annotation.authentication.configuration.AuthenticationConfiguration;
+import org.springframework.security.config.annotation.method.configuration.EnableMethodSecurity;
+import org.springframework.security.config.http.SessionCreationPolicy;
+import org.springframework.security.web.SecurityFilterChain;
+import org.springframework.security.web.authentication.UsernamePasswordAuthenticationFilter;
+import org.springframework.security.crypto.password.PasswordEncoder;
+import org.springframework.security.config.annotation.web.builders.HttpSecurity;
+import org.springframework.web.cors.CorsConfiguration;
+import org.springframework.web.cors.CorsConfigurationSource;
+import org.springframework.web.cors.UrlBasedCorsConfigurationSource;
+
+import java.util.List;
+
 @Configuration
 @EnableMethodSecurity
 public class SecurityConfig {
@@ -24,7 +44,7 @@ public class SecurityConfig {
                 // Preflight CORS — SIEMPRE debe pasar sin autenticación,
                 // o el navegador bloquea la petición real (GET/PUT/POST) para
                 // TODOS los roles, ya que el preflight nunca lleva el token.
-                .requestMatchers(org.springframework.http.HttpMethod.OPTIONS, "/**").permitAll()
+                .requestMatchers(HttpMethod.OPTIONS, "/**").permitAll()
                 // Públicos — sin autenticación
                 .requestMatchers(
                     "/api/auth/**",
