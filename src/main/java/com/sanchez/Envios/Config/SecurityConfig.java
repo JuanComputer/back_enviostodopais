@@ -88,7 +88,14 @@ public class SecurityConfig {
     @Bean
     public CorsConfigurationSource corsSource() {
         CorsConfiguration config = new CorsConfiguration();
-        config.setAllowedOriginPatterns(List.of("*"));
+        // IMPORTANTE: con allowCredentials(true) no se debe usar "*" como origen.
+        // Se listan explícitamente los dominios del frontend (prod + dev local).
+        // Ajusta/agrega aquí si hay otros dominios (staging, etc.)
+        config.setAllowedOriginPatterns(List.of(
+                "https://mfenvios.uptemp.app",
+                "http://localhost:4200",
+                "http://localhost:*"
+        ));
         config.setAllowedMethods(List.of("GET", "POST", "PUT", "DELETE", "OPTIONS"));
         config.setAllowedHeaders(List.of("*"));
         config.setAllowCredentials(true);
